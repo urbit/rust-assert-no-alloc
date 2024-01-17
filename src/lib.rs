@@ -35,7 +35,7 @@ compile_error!("disable_release cannot be active at the same time with warn_rele
 thread_local! {
 	static ALLOC_FORBID_COUNT: Cell<u32> = Cell::new(0);
 	static ALLOC_PERMIT_COUNT: Cell<u32> = Cell::new(0);
-	
+
 	#[cfg(any( all(feature="warn_debug", debug_assertions), all(feature="warn_release", not(debug_assertions)) ))]
 	static ALLOC_VIOLATION_COUNT: Cell<u32> = Cell::new(0);
 }
@@ -92,6 +92,22 @@ pub fn assert_no_alloc<T, F: FnOnce() -> T> (func: F) -> T {
 }
 
 #[cfg(not(all(feature = "disable_release", not(debug_assertions))))] // if not disabled
+/// Calls the `func` closure, but ensures that the forbid and permit counters
+/// are maintained accurately even if a longjmp occurs. Used as a wrapper around
+/// `assert_no_alloc`.
+pub fn ensure_alloc_counters<T, F: FnOnce() -> T> (func: F) -> T {
+	let forbid_counter = ALLOC_FORBID_COUNT.with(|c| c.get());
+	let permit_counter = ALLOC_PERMIT_COUNT.with(|c| c.get());
+
+	let ret = func();
+
+	ALLOC_FORBID_COUNT.with(|c| c.set(forbid_counter));
+	ALLOC_PERMIT_COUNT.with(|c| c.set(permit_counter));
+
+	return ret;
+}
+
+#[cfg(not(all(feature = "disable_release", not(debug_assertions))))] // if not disabled
 /// Calls the `func` closure. Allocations are temporarily allowed, even if this
 /// code runs inside of assert_no_alloc.
 pub fn permit_alloc<T, F: FnOnce() -> T> (func: F) -> T {
@@ -108,7 +124,7 @@ pub fn permit_alloc<T, F: FnOnce() -> T> (func: F) -> T {
 			ALLOC_PERMIT_COUNT.with(|c| c.set(c.get()-1));
 		}
 	}
-	
+
 	let guard = Guard::new(); // increment the forbid counter
 	let ret = func();
 	std::mem::drop(guard);    // decrement the forbid counter
